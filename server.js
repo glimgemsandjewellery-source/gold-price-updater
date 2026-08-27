@@ -1,178 +1,173 @@
 const express = require("express");
-const cors = require("cors");
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 let goldPrice = 0;
 
-// Home Page
+// HOME PAGE
 app.get("/", (req, res) => {
   res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Gold Price Updater</title>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Gold Price Updater</title>
 
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          background: #f6f6f7;
-          margin: 0;
-          padding: 40px;
-        }
+  <style>
+    * {
+      box-sizing: border-box;
+    }
 
-        .container {
-          max-width: 600px;
-          margin: auto;
-          background: white;
-          padding: 30px;
-          border-radius: 12px;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f6f6f7;
+      margin: 0;
+      padding: 40px;
+    }
 
-        h1 {
-          margin-top: 0;
-        }
+    .container {
+      max-width: 700px;
+      margin: auto;
+      background: white;
+      padding: 35px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
 
-        label {
-          display: block;
-          font-weight: bold;
-          margin-top: 20px;
-          margin-bottom: 8px;
-        }
+    h1 {
+      margin-top: 0;
+      color: #202223;
+    }
 
-        input {
-          width: 100%;
-          padding: 14px;
-          font-size: 18px;
-          box-sizing: border-box;
-          border: 1px solid #ccc;
-          border-radius: 6px;
-        }
+    .card {
+      background: #f6f6f7;
+      padding: 25px;
+      border-radius: 10px;
+      margin-top: 20px;
+    }
 
-        button {
-          margin-top: 20px;
-          width: 100%;
-          padding: 14px;
-          font-size: 16px;
-          background: #008060;
-          color: white;
-          border: none;
-          border-radius: 6px;
-          cursor: pointer;
-        }
+    label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
 
-        button:hover {
-          background: #006e52;
-        }
+    input {
+      width: 100%;
+      padding: 14px;
+      font-size: 18px;
+      border: 1px solid #babfc3;
+      border-radius: 8px;
+      margin-bottom: 15px;
+    }
 
-        .price-box {
-          margin-top: 25px;
-          padding: 20px;
-          background: #f1f8f5;
-          border-radius: 8px;
-          font-size: 18px;
-        }
+    button {
+      background: #008060;
+      color: white;
+      border: none;
+      padding: 14px 25px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
 
-        #message {
-          margin-top: 15px;
-          font-weight: bold;
-          color: green;
-        }
-      </style>
-    </head>
+    button:hover {
+      background: #006e52;
+    }
 
-    <body>
+    .price-box {
+      margin-top: 25px;
+      padding: 20px;
+      background: #e3f1df;
+      border-radius: 10px;
+    }
 
-      <div class="container">
+    .price {
+      font-size: 30px;
+      font-weight: bold;
+      color: #008060;
+      margin-top: 8px;
+    }
 
-        <h1>Gold Price Updater</h1>
+    .note {
+      margin-top: 25px;
+      color: #616161;
+      line-height: 1.6;
+    }
+  </style>
+</head>
 
-        <label>Today's Gold Price</label>
+<body>
+
+  <div class="container">
+
+    <h1>💰 Gold Price Updater</h1>
+
+    <div class="card">
+
+      <form action="/update-gold-price" method="POST">
+
+        <label>Today's Gold Price (Per Gram)</label>
 
         <input
           type="number"
-          id="goldPrice"
-          placeholder="Enter today's gold price"
+          name="goldPrice"
+          placeholder="Enter gold price per gram"
           value="${goldPrice}"
-        />
+          required
+        >
 
-        <button onclick="updateGoldPrice()">
+        <button type="submit">
           Update Gold Price
         </button>
 
-        <div id="message"></div>
+      </form>
 
-        <div class="price-box">
-          <strong>Current Gold Price:</strong>
-          ₹ <span id="currentPrice">${goldPrice}</span>
-        </div>
+    </div>
 
+    <div class="price-box">
+
+      Current Gold Price
+
+      <div class="price">
+        ₹ ${goldPrice} / Gram
       </div>
 
-      <script>
+    </div>
 
-        async function updateGoldPrice() {
+    <div class="note">
 
-          const price = document.getElementById("goldPrice").value;
+      <b>Next Step:</b><br>
 
-          if (!price || price <= 0) {
-            document.getElementById("message").innerHTML =
-              "Please enter a valid gold price.";
-            return;
-          }
+      હવે દરેક jewellery product નો Gold Weight અને Making Charge
+      system માં add કરીને automatic product price update system connect કરીશું.
 
-          const response = await fetch("/update-gold-price", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              goldPrice: price
-            })
-          });
+    </div>
 
-          const data = await response.json();
+  </div>
 
-          document.getElementById("message").innerHTML =
-            data.message;
-
-          document.getElementById("currentPrice").innerHTML =
-            price;
-        }
-
-      </script>
-
-    </body>
-    </html>
+</body>
+</html>
   `);
 });
 
 
-// Update Gold Price
+// UPDATE GOLD PRICE
 app.post("/update-gold-price", (req, res) => {
 
-  const { goldPrice: newGoldPrice } = req.body;
+  goldPrice = Number(req.body.goldPrice);
 
-  goldPrice = Number(newGoldPrice);
+  console.log("Gold Price Updated:", goldPrice);
 
-  console.log("New Gold Price:", goldPrice);
-
-  res.json({
-    success: true,
-    message: "Gold price updated successfully!",
-    goldPrice: goldPrice
-  });
-
+  res.redirect("/");
 });
 
 
-const PORT = process.env.PORT || 3000;
+// SERVER
+const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-  console.log(\`Server running on port \${PORT}\`);
+  console.log("Gold Price Updater running on port " + PORT);
 });
