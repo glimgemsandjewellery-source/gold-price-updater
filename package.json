@@ -1,0 +1,13 @@
+{
+  "name": "gold-price-updater",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@shopify/shopify-api": "^11.0.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0"
+  }
+}
