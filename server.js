@@ -5,7 +5,8 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-let goldPrice = 0;
+let goldPrice = 75000;
+
 
 // ==========================================
 // SHOPIFY SETTINGS
@@ -14,7 +15,9 @@ let goldPrice = 0;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-const INR_TO_USD = Number(process.env.INR_TO_USD || 0.012);
+const INR_TO_USD = Number(
+  process.env.INR_TO_USD || 0.012
+);
 
 
 // ==========================================
@@ -160,7 +163,7 @@ Update All Product Prices
 
 
 // ==========================================
-// UPDATE ALL GOLD PRODUCTS
+// UPDATE ALL PRODUCT PRICES
 // ==========================================
 
 app.post("/update-gold-price", async (req, res) => {
@@ -169,35 +172,53 @@ app.post("/update-gold-price", async (req, res) => {
 
     goldPrice = Number(req.body.goldPrice);
 
+
+    // ==========================================
+    // VALIDATE GOLD PRICE
+    // ==========================================
+
     if (!goldPrice || goldPrice <= 0) {
 
       return res.send(`
-        <h1>❌ Please enter a valid Gold Price</h1>
-        <br>
-        <a href="/">← Go Back</a>
+
+<h1>❌ Please enter a valid Gold Price</h1>
+
+<br>
+
+<a href="/">← Go Back</a>
+
       `);
 
     }
 
+
+    // ==========================================
+    // CHECK SHOPIFY SETTINGS
+    // ==========================================
 
     if (!SHOPIFY_STORE || !SHOPIFY_ACCESS_TOKEN) {
 
       return res.send(`
-        <h1>❌ Shopify Settings Missing</h1>
 
-        <p>
-        SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN is missing in Render.
-        </p>
+<h1>❌ Shopify Settings Missing</h1>
 
-        <br>
+<p>
+SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN is missing in Render.
+</p>
 
-        <a href="/">← Go Back</a>
+<br>
+
+<a href="/">← Go Back</a>
+
       `);
 
     }
 
 
+    console.log("==================================");
     console.log("Today's Gold Price:", goldPrice);
+    console.log("Shopify Store:", SHOPIFY_STORE);
+    console.log("==================================");
 
 
     // ==========================================
@@ -212,9 +233,11 @@ app.post("/update-gold-price", async (req, res) => {
 
         headers: {
 
-          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "X-Shopify-Access-Token":
+            SHOPIFY_ACCESS_TOKEN,
 
-          "Content-Type": "application/json"
+          "Content-Type":
+            "application/json"
 
         }
 
@@ -225,9 +248,13 @@ app.post("/update-gold-price", async (req, res) => {
 
     if (!productsResponse.ok) {
 
-      const errorText = await productsResponse.text();
+      const errorText =
+        await productsResponse.text();
 
-      console.log("Shopify Error:", errorText);
+      console.log(
+        "Shopify Products Error:",
+        errorText
+      );
 
       throw new Error(
         "Unable to connect to Shopify API"
@@ -236,12 +263,23 @@ app.post("/update-gold-price", async (req, res) => {
     }
 
 
-    const data = await productsResponse.json();
+    const data =
+      await productsResponse.json();
 
-    const products = data.products || [];
+
+    const products =
+      data.products || [];
+
+
+    console.log(
+      "Total Products Found:",
+      products.length
+    );
 
 
     let updatedProducts = 0;
+    let updatedVariants = 0;
+    let skippedProducts = 0;
 
 
     // ==========================================
@@ -249,6 +287,12 @@ app.post("/update-gold-price", async (req, res) => {
     // ==========================================
 
     for (const product of products) {
+
+
+      console.log(
+        "Checking Product:",
+        product.title
+      );
 
 
       // ==========================================
@@ -264,7 +308,10 @@ app.post("/update-gold-price", async (req, res) => {
           headers: {
 
             "X-Shopify-Access-Token":
-              SHOPIFY_ACCESS_TOKEN
+              SHOPIFY_ACCESS_TOKEN,
+
+            "Content-Type":
+              "application/json"
 
           }
 
@@ -276,9 +323,11 @@ app.post("/update-gold-price", async (req, res) => {
       if (!metafieldsResponse.ok) {
 
         console.log(
-          "Could not get metafields for:",
+          "Could not get metafields:",
           product.title
         );
+
+        skippedProducts++;
 
         continue;
 
@@ -304,8 +353,11 @@ app.post("/update-gold-price", async (req, res) => {
           item.namespace === "custom" &&
 
           (
+
             item.key === "gold_weight" ||
+
             item.key === "weight"
+
           )
 
       );
@@ -322,15 +374,18 @@ app.post("/update-gold-price", async (req, res) => {
           item.namespace === "custom" &&
 
           (
+
             item.key === "making_charge" ||
+
             item.key === "makingcharge"
+
           )
 
       );
 
 
       // ==========================================
-      // NO GOLD WEIGHT = SKIP PRODUCT
+      // NO GOLD WEIGHT = SKIP
       // ==========================================
 
       if (!weightField) {
@@ -340,10 +395,16 @@ app.post("/update-gold-price", async (req, res) => {
           product.title
         );
 
+        skippedProducts++;
+
         continue;
 
       }
 
+
+      // ==========================================
+      // GET VALUES
+      // ==========================================
 
       const goldWeight =
         Number(weightField.value);
@@ -356,7 +417,25 @@ app.post("/update-gold-price", async (req, res) => {
 
 
       // ==========================================
-      // CALCULATE PRODUCT PRICE
+      // VALIDATE WEIGHT
+      // ==========================================
+
+      if (!goldWeight || goldWeight <= 0) {
+
+        console.log(
+          "Skipped - Invalid Gold Weight:",
+          product.title
+        );
+
+        skippedProducts++;
+
+        continue;
+
+      }
+
+
+      // ==========================================
+      // CALCULATE INR PRICE
       // ==========================================
 
       const priceINR =
@@ -368,7 +447,9 @@ app.post("/update-gold-price", async (req, res) => {
         makingCharge;
 
 
+      // ==========================================
       // INR TO USD
+      // ==========================================
 
       const priceUSD =
 
@@ -382,8 +463,37 @@ app.post("/update-gold-price", async (req, res) => {
         );
 
 
+      console.log(
+        "Product:",
+        product.title
+      );
+
+      console.log(
+        "Gold Weight:",
+        goldWeight
+      );
+
+      console.log(
+        "Making Charge:",
+        makingCharge
+      );
+
+      console.log(
+        "Final INR Price:",
+        priceINR
+      );
+
+      console.log(
+        "Final USD Price:",
+        finalPrice
+      );
+
+
+      let productUpdated = false;
+
+
       // ==========================================
-      // UPDATE ALL PRODUCT VARIANTS
+      // UPDATE ALL VARIANTS
       // ==========================================
 
       for (const variant of product.variants) {
@@ -432,34 +542,46 @@ app.post("/update-gold-price", async (req, res) => {
 
 
           console.log(
-
-            "Variant Update Error:",
-
-            product.title,
-
-            errorText
-
+            "Variant Update Error:"
           );
+
+          console.log(
+            "Product:",
+            product.title
+          );
+
+          console.log(
+            "Variant:",
+            variant.title
+          );
+
+          console.log(
+            errorText
+          );
+
+        }
+
+        else {
+
+          console.log(
+            "Updated Variant:",
+            variant.title
+          );
+
+          updatedVariants++;
+
+          productUpdated = true;
 
         }
 
       }
 
 
-      updatedProducts++;
+      if (productUpdated) {
 
+        updatedProducts++;
 
-      console.log(
-
-        "Updated:",
-
-        product.title,
-
-        "Final Price:",
-
-        finalPrice
-
-      );
+      }
 
     }
 
@@ -554,7 +676,19 @@ ${updatedProducts} Products Updated
 
 <p>
 
+${updatedVariants} Variants Updated
+
+</p>
+
+<p>
+
 Today's Gold Price: ₹ ${goldPrice}
+
+</p>
+
+<p>
+
+Skipped Products: ${skippedProducts}
 
 </p>
 
@@ -583,22 +717,27 @@ All eligible Gold product prices have been updated.
 
   catch (error) {
 
-    console.error(error);
+    console.error(
+      "ERROR:",
+      error
+    );
 
 
     res.send(`
 
 <h1>❌ Error Updating Products</h1>
 
-<p>${error.message}</p>
+<p>
+
+${error.message}
+
+</p>
 
 <br>
 
 <a href="/">
 
-← Go Back
-
-</a>
+← Go Back</a>
 
     `);
 
@@ -618,9 +757,7 @@ const PORT =
 app.listen(PORT, () => {
 
   console.log(
-
     "Gold Price Updater running on port " + PORT
-
   );
 
 });
