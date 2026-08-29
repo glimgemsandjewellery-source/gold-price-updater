@@ -1,527 +1,285 @@
 const express = require("express");
+const axios = require("axios");
 
 const app = express();
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-
-// =====================================================
-// SETTINGS
-// =====================================================
+/* =====================================================
+   SHOPIFY CONFIGURATION
+===================================================== */
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// INR → USD conversion rate
-// Render Environment Variables માં પણ મૂકી શકાય
-const INR_TO_USD = Number(process.env.INR_TO_USD || 0.012);
+// તમારી Shopify store USD માં છે
+const USD_CONVERSION_RATE = Number(
+  process.env.INR_TO_USD_RATE || 83
+);
+
+/*
+  શરૂઆતમાં Current Gold Price 0 જ રહેશે.
+  Render restart થાય તો પણ 0 થી શરૂ થશે.
+*/
+let currentGoldPrice = 0;
 
 
-// =====================================================
-// CURRENT GOLD PRICE
-// =====================================================
+/* =====================================================
+   CHECK SHOPIFY SETTINGS
+===================================================== */
 
-let goldPrice = Number(process.env.DEFAULT_GOLD_PRICE || 75000);
-
-
-// =====================================================
-// SHOPIFY HEADERS
-// =====================================================
-
-function shopifyHeaders() {
-  return {
-    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-    "Content-Type": "application/json"
-  };
+function checkShopifyConfig() {
+  if (!SHOPIFY_STORE || !SHOPIFY_ACCESS_TOKEN) {
+    throw new Error(
+      "SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN is missing in Render Environment Variables"
+    );
+  }
 }
 
 
-// =====================================================
-// NORMALIZE SHOPIFY STORE NAME
-// =====================================================
-
-function getStoreUrl() {
-
-  if (!SHOPIFY_STORE) {
-    return null;
-  }
-
-  let store = SHOPIFY_STORE
-    .trim()
-    .replace("https://", "")
-    .replace("http://", "");
-
-  return store;
-}
-
-
-// =====================================================
-// GET NEXT PAGE URL FROM SHOPIFY LINK HEADER
-// =====================================================
-
-function getNextPageUrl(linkHeader) {
-
-  if (!linkHeader) {
-    return null;
-  }
-
-  const links = linkHeader.split(",");
-
-  for (const link of links) {
-
-    if (link.includes('rel="next"')) {
-
-      const match = link.match(/<([^>]+)>/);
-
-      if (match && match[1]) {
-        return match[1];
-      }
-
-    }
-
-  }
-
-  return null;
-}
-
-
-// =====================================================
-// GET ALL SHOPIFY PRODUCTS
-// =====================================================
-
-async function getAllProducts() {
-
-  const store = getStoreUrl();
-
-  let url =
-    `https://${store}/admin/api/2025-01/products.json?limit=250`;
-
-  let allProducts = [];
-
-  while (url) {
-
-    console.log("Fetching products page...");
-
-    const response = await fetch(
-      url,
-      {
-        headers: shopifyHeaders()
-      }
-    );
-
-    if (!response.ok) {
-
-      const errorText = await response.text();
-
-      console.log("PRODUCT FETCH ERROR:");
-      console.log(errorText);
-
-      throw new Error(
-        "Unable to fetch products from Shopify"
-      );
-    }
-
-    const data = await response.json();
-
-    const products = data.products || [];
-
-    allProducts.push(...products);
-
-    url = getNextPageUrl(
-      response.headers.get("link")
-    );
-  }
-
-  return allProducts;
-}
-
-
-// =====================================================
-// GET PRODUCT METAFIELDS
-// =====================================================
-
-async function getProductMetafields(productId) {
-
-  const store = getStoreUrl();
-
-  let url =
-    `https://${store}/admin/api/2025-01/products/${productId}/metafields.json?limit=250`;
-
-  let allMetafields = [];
-
-  while (url) {
-
-    const response = await fetch(
-      url,
-      {
-        headers: shopifyHeaders()
-      }
-    );
-
-    if (!response.ok) {
-
-      const errorText = await response.text();
-
-      console.log(
-        "METAFIELD ERROR:",
-        productId,
-        errorText
-      );
-
-      return [];
-    }
-
-    const data = await response.json();
-
-    allMetafields.push(
-      ...(data.metafields || [])
-    );
-
-    url = getNextPageUrl(
-      response.headers.get("link")
-    );
-  }
-
-  return allMetafields;
-}
-
-
-// =====================================================
-// CLEAN NUMBER FROM METAFIELD
-// Supports:
-// 5
-// 5.25
-// "5.25"
-// "5.25 g"
-// =====================================================
-
-function getNumber(value) {
-
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return 0;
-  }
-
-  if (typeof value === "number") {
-    return value;
-  }
-
-  const cleaned = String(value)
-    .replace(/,/g, "")
-    .replace(/[^\d.-]/g, "");
-
-  const number = Number(cleaned);
-
-  if (!Number.isFinite(number)) {
-    return 0;
-  }
-
-  return number;
-}
-
-
-// =====================================================
-// FIND METAFIELD BY MANY POSSIBLE NAMES
-// =====================================================
-
-function findMetafield(
-  metafields,
-  possibleKeys
-) {
-
-  const normalizedKeys =
-    possibleKeys.map(key =>
-      key
-        .toLowerCase()
-        .replace(/[\s_-]/g, "")
-    );
-
-  return metafields.find(field => {
-
-    const key =
-      String(field.key || "")
-        .toLowerCase()
-        .replace(/[\s_-]/g, "");
-
-    return normalizedKeys.includes(key);
-
+/* =====================================================
+   SHOPIFY API
+===================================================== */
+
+function shopifyApi() {
+  checkShopifyConfig();
+
+  return axios.create({
+    baseURL: `https://${SHOPIFY_STORE}/admin/api/2025-01`,
+    headers: {
+      "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+      "Content-Type": "application/json"
+    },
+    timeout: 30000
   });
-
 }
 
 
-// =====================================================
-// GET GOLD WEIGHT
-//
-// Supports many possible metafield names:
-// gold_weight
-// goldweight
-// gold_weight_in_grams
-// weight
-// product_weight
-// jewellery_weight
-// jewelry_weight
-// net_weight
-// =====================================================
+/* =====================================================
+   CHECK IF VARIANT IS GOLD
+===================================================== */
 
-function getGoldWeight(metafields) {
+function isGoldVariant(variant) {
 
-  const field = findMetafield(
-    metafields,
-    [
+  if (!variant) return false;
 
-      "gold_weight",
-
-      "goldweight",
-
-      "gold_weight_in_grams",
-
-      "gold_weight_grams",
-
-      "gold_grams",
-
-      "goldgram",
-
-      "gold_gram",
-
-      "weight",
-
-      "product_weight",
-
-      "jewellery_weight",
-
-      "jewelry_weight",
-
-      "net_weight"
-
-    ]
-  );
-
-  if (!field) {
-    return 0;
-  }
-
-  return getNumber(field.value);
-}
-
-
-// =====================================================
-// GET MAKING CHARGE
-//
-// Supports many possible names
-// =====================================================
-
-function getMakingCharge(metafields) {
-
-  const field = findMetafield(
-    metafields,
-    [
-
-      "making_charge",
-
-      "makingcharge",
-
-      "making_charges",
-
-      "making",
-
-      "labour_charge",
-
-      "labor_charge",
-
-      "manufacturing_charge"
-
-    ]
-  );
-
-  if (!field) {
-    return 0;
-  }
-
-  return getNumber(field.value);
-}
-
-
-// =====================================================
-// CHECK WHETHER VARIANT IS GOLD
-//
-// This checks all variant option values.
-// Example:
-//
-// Metal Type = Gold
-// Jewelry Material = Gold
-// Material = Gold
-// =====================================================
-
-function isGoldVariant(product, variant) {
-
-  const goldWords = [
-
-    "gold",
-
-    "yellow gold",
-
-    "white gold",
-
-    "rose gold",
-
-    "18k",
-
-    "14k",
-
-    "22k",
-
-    "24k"
-
-  ];
-
-
-  const silverWords = [
-
-    "silver",
-
-    "sterling silver",
-
-    "925 silver"
-
-  ];
-
-
-  const values = [
-
+  // બધા option values ને check કરશું
+  const optionValues = [
     variant.option1,
-
     variant.option2,
+    variant.option3
+  ]
+    .filter(Boolean)
+    .map(value => String(value).toLowerCase().trim());
 
-    variant.option3,
+  // Silver હોય તો ક્યારેય update નહીં
+  const hasSilver = optionValues.some(value =>
+    value.includes("silver")
+  );
 
-    variant.title
-
-  ];
-
-
-  let hasGold = false;
-
-
-  for (const value of values) {
-
-    if (!value) {
-      continue;
-    }
-
-    const text =
-      String(value).toLowerCase().trim();
-
-
-    // Silver found = NEVER UPDATE
-    for (const silverWord of silverWords) {
-
-      if (text.includes(silverWord)) {
-        return false;
-      }
-
-    }
-
-
-    // Gold found
-    for (const goldWord of goldWords) {
-
-      if (text.includes(goldWord)) {
-        hasGold = true;
-      }
-
-    }
-
+  if (hasSilver) {
+    return false;
   }
 
+  // Gold શોધવું
+  const hasGold = optionValues.some(value =>
+    value.includes("gold")
+  );
 
   return hasGold;
 }
 
 
-// =====================================================
-// UPDATE SHOPIFY VARIANT PRICE
-// =====================================================
+/* =====================================================
+   GET ALL PRODUCTS FROM SHOPIFY
+===================================================== */
 
-async function updateVariantPrice(
-  variantId,
-  priceUSD
-) {
+async function getAllProducts() {
 
-  const store = getStoreUrl();
+  const api = shopifyApi();
 
-  const response = await fetch(
+  let allProducts = [];
+  let pageInfo = null;
 
-    `https://${store}/admin/api/2025-01/variants/${variantId}.json`,
+  do {
 
-    {
+    let url = "/products.json?limit=250";
 
-      method: "PUT",
-
-      headers: shopifyHeaders(),
-
-      body: JSON.stringify({
-
-        variant: {
-
-          id: variantId,
-
-          price: Number(priceUSD).toFixed(2)
-
-        }
-
-      })
-
+    if (pageInfo) {
+      url += `&page_info=${pageInfo}`;
     }
 
-  );
+    const response = await api.get(url);
 
+    const products = response.data.products || [];
 
-  if (!response.ok) {
+    allProducts.push(...products);
 
-    const errorText =
-      await response.text();
+    // Link header માં next page શોધવી
+    const linkHeader = response.headers.link;
 
-    console.log(
-      "VARIANT UPDATE ERROR:"
-    );
+    pageInfo = null;
 
-    console.log(errorText);
+    if (linkHeader) {
 
-    return false;
-  }
+      const links = linkHeader.split(",");
 
+      for (const link of links) {
 
-  return true;
+        if (link.includes('rel="next"')) {
+
+          const match = link.match(/page_info=([^&>]+)/);
+
+          if (match && match[1]) {
+            pageInfo = match[1];
+          }
+        }
+      }
+    }
+
+  } while (pageInfo);
+
+  return allProducts;
 }
 
 
-// =====================================================
-// HOME PAGE
-// =====================================================
+/* =====================================================
+   UPDATE GOLD VARIANT PRICE
+===================================================== */
+
+async function updateVariantPrice(variantId, priceUSD) {
+
+  const api = shopifyApi();
+
+  await api.put(
+    `/variants/${variantId}.json`,
+    {
+      variant: {
+        id: variantId,
+        price: priceUSD.toFixed(2)
+      }
+    }
+  );
+}
+
+
+/* =====================================================
+   UPDATE ALL GOLD PRODUCTS
+===================================================== */
+
+async function updateAllGoldProducts(goldPriceINR) {
+
+  const products = await getAllProducts();
+
+  let productsUpdated = 0;
+  let goldVariantsUpdated = 0;
+  let silverVariantsSkipped = 0;
+  let otherVariantsSkipped = 0;
+  let errors = [];
+
+  /*
+    INR થી USD conversion
+
+    Example:
+    ₹75000 / 83 = $903.61
+  */
+
+  const goldPriceUSD =
+    Number(goldPriceINR) / USD_CONVERSION_RATE;
+
+
+  for (const product of products) {
+
+    let productWasUpdated = false;
+
+    const variants = product.variants || [];
+
+    for (const variant of variants) {
+
+      try {
+
+        // માત્ર Gold variants
+        if (isGoldVariant(variant)) {
+
+          await updateVariantPrice(
+            variant.id,
+            goldPriceUSD
+          );
+
+          goldVariantsUpdated++;
+          productWasUpdated = true;
+
+        } else {
+
+          const options = [
+            variant.option1,
+            variant.option2,
+            variant.option3
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+          if (options.includes("silver")) {
+            silverVariantsSkipped++;
+          } else {
+            otherVariantsSkipped++;
+          }
+        }
+
+      } catch (error) {
+
+        console.error(
+          `Error updating variant ${variant.id}:`,
+          error.response?.data || error.message
+        );
+
+        errors.push({
+          variantId: variant.id,
+          error:
+            error.response?.data?.errors ||
+            error.message
+        });
+      }
+    }
+
+    if (productWasUpdated) {
+      productsUpdated++;
+    }
+  }
+
+  return {
+    totalProducts: products.length,
+    productsUpdated,
+    goldVariantsUpdated,
+    silverVariantsSkipped,
+    otherVariantsSkipped,
+    goldPriceINR,
+    goldPriceUSD,
+    errors
+  };
+}
+
+
+/* =====================================================
+   HOME PAGE
+===================================================== */
 
 app.get("/", (req, res) => {
 
   res.send(`
-
 <!DOCTYPE html>
-
-<html>
+<html lang="en">
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1.0"
->
+<meta name="viewport"
+content="width=device-width, initial-scale=1.0">
 
 <title>Gold Price Updater</title>
-
 
 <style>
 
@@ -529,193 +287,185 @@ content="width=device-width, initial-scale=1.0"
   box-sizing: border-box;
 }
 
-
 body {
-
-  font-family:
-    Arial,
-    sans-serif;
-
-  background:
-    #f6f6f7;
-
   margin: 0;
+  min-height: 100vh;
 
-  padding: 40px 20px;
+  font-family: Arial, sans-serif;
 
+  background: #f4f5f7;
+
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+
+  padding-top: 80px;
+
+  color: #1f2937;
 }
-
 
 .container {
 
+  width: 100%;
   max-width: 700px;
-
-  margin: auto;
 
   background: white;
 
   padding: 35px;
 
-  border-radius: 12px;
+  border-radius: 16px;
 
   box-shadow:
-    0 4px 20px
+    0 10px 35px
     rgba(0,0,0,0.08);
-
 }
-
 
 h1 {
 
   margin-top: 0;
 
-  color: #202223;
+  font-size: 34px;
 
+  display: flex;
+  align-items: center;
+
+  gap: 12px;
 }
 
+.form-box {
 
-.card {
-
-  background: #f6f6f7;
+  background: #f1f3f5;
 
   padding: 25px;
 
-  border-radius: 10px;
+  border-radius: 14px;
 
-  margin-top: 20px;
-
+  margin-top: 25px;
 }
-
 
 label {
 
   display: block;
 
+  font-size: 17px;
+
   font-weight: bold;
 
-  margin-bottom: 10px;
-
+  margin-bottom: 12px;
 }
-
 
 input {
 
   width: 100%;
 
-  padding: 14px;
+  padding: 18px;
+
+  border-radius: 10px;
+
+  border: 1px solid #b8c0c8;
 
   font-size: 18px;
-
-  border:
-    1px solid #babfc3;
-
-  border-radius: 8px;
-
-  margin-bottom: 15px;
-
 }
-
 
 button {
 
   width: 100%;
 
-  background: #008060;
+  margin-top: 15px;
 
-  color: white;
+  padding: 17px;
 
   border: none;
 
-  padding: 14px 25px;
-
-  font-size: 16px;
-
   border-radius: 8px;
 
+  background: #147d67;
+
+  color: white;
+
+  font-size: 17px;
+
   cursor: pointer;
-
 }
-
 
 button:hover {
-
-  background: #006e52;
-
+  background: #106b59;
 }
 
-
-.price-box {
+.current-box {
 
   margin-top: 25px;
 
-  padding: 20px;
+  padding: 22px;
 
-  background: #e3f1df;
+  border-radius: 14px;
 
-  border-radius: 10px;
-
+  background:
+    linear-gradient(
+      90deg,
+      #e5eee2,
+      #d8e4d3
+    );
 }
 
+.current-title {
 
-.price {
+  font-weight: bold;
+
+  font-size: 17px;
+}
+
+.current-price {
+
+  margin-top: 8px;
 
   font-size: 30px;
 
   font-weight: bold;
 
-  color: #008060;
-
-  margin-top: 8px;
-
+  color: #176653;
 }
 
+.info {
+
+  margin-top: 20px;
+
+  color: #666;
+
+  font-size: 14px;
+}
 
 </style>
 
 </head>
 
-
 <body>
 
-
 <div class="container">
-
 
 <h1>
 💰 Gold Price Updater
 </h1>
 
 
-<div class="card">
-
-
 <form
 action="/update-gold-price"
 method="POST"
+class="form-box"
 >
-
 
 <label>
 Today's Gold Price (₹ Per Gram)
 </label>
 
-
 <input
-
 type="number"
-
-step="0.01"
-
 name="goldPrice"
-
+step="0.01"
+min="0"
 placeholder="Enter today's Gold price"
-
-value="${goldPrice}"
-
 required
-
 >
-
 
 <button type="submit">
 
@@ -723,414 +473,74 @@ Update All Gold Product Prices
 
 </button>
 
-
 </form>
 
 
-</div>
+<div class="current-box">
 
+<div class="current-title">
 
-<div class="price-box">
-
-
-<b>
 Current Gold Price:
-</b>
 
+</div>
 
-<div class="price">
+<div class="current-price">
 
-₹ ${goldPrice}
+₹ ${currentGoldPrice.toFixed(2)}
+
+</div>
 
 </div>
 
 
+<div class="info">
+
+Only Gold variants will be updated. Silver variants will remain unchanged.
+
 </div>
 
-
 </div>
-
 
 </body>
 
 </html>
-
   `);
-
 });
 
 
-// =====================================================
-// UPDATE ALL GOLD PRODUCTS
-// =====================================================
+/* =====================================================
+   UPDATE GOLD PRICE ROUTE
+===================================================== */
 
-app.post(
-  "/update-gold-price",
-  async (req, res) => {
+app.post("/update-gold-price", async (req, res) => {
 
-    try {
+  try {
 
+    const goldPrice = Number(req.body.goldPrice);
 
-      // ==============================================
-      // VALIDATE GOLD PRICE
-      // ==============================================
+    if (
+      !goldPrice ||
+      goldPrice <= 0
+    ) {
 
-      const newGoldPrice =
-        Number(req.body.goldPrice);
+      return res.status(400).send(`
+        <h2>Invalid Gold Price</h2>
+        <p>Please enter a valid Gold price.</p>
+        <a href="/">← Go Back</a>
+      `);
+    }
 
 
-      if (
-        !Number.isFinite(newGoldPrice) ||
-        newGoldPrice <= 0
-      ) {
+    // બધા products update કરો
+    const result =
+      await updateAllGoldProducts(goldPrice);
 
-        throw new Error(
-          "Please enter a valid Gold Price"
-        );
 
-      }
+    // સફળ થયા પછી current price update
+    currentGoldPrice = goldPrice;
 
 
-      if (
-        !SHOPIFY_STORE ||
-        !SHOPIFY_ACCESS_TOKEN
-      ) {
-
-        throw new Error(
-          "SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN is missing in Render Environment Variables"
-        );
-
-      }
-
-
-      // Save new rate only after button click
-      goldPrice = newGoldPrice;
-
-
-      console.log(
-        "========================================"
-      );
-
-      console.log(
-        "NEW GOLD PRICE:",
-        goldPrice
-      );
-
-      console.log(
-        "INR TO USD:",
-        INR_TO_USD
-      );
-
-      console.log(
-        "========================================"
-      );
-
-
-      // ==============================================
-      // GET ALL PRODUCTS
-      // ==============================================
-
-      const products =
-        await getAllProducts();
-
-
-      console.log(
-        "TOTAL PRODUCTS FOUND:",
-        products.length
-      );
-
-
-      let updatedProducts = 0;
-
-      let updatedGoldVariants = 0;
-
-      let silverVariantsNotChanged = 0;
-
-      let productsWithoutGoldWeight = 0;
-
-      let failedVariants = 0;
-
-
-      // ==============================================
-      // LOOP THROUGH EVERY PRODUCT
-      // ==============================================
-
-      for (const product of products) {
-
-
-        console.log(
-          "----------------------------------------"
-        );
-
-        console.log(
-          "CHECKING PRODUCT:",
-          product.title
-        );
-
-
-        // ============================================
-        // GET PRODUCT METAFIELDS
-        // ============================================
-
-        const metafields =
-          await getProductMetafields(
-            product.id
-          );
-
-
-        // ============================================
-        // GET GOLD WEIGHT
-        // ============================================
-
-        const goldWeight =
-          getGoldWeight(
-            metafields
-          );
-
-
-        // ============================================
-        // GET MAKING CHARGE
-        // ============================================
-
-        const makingCharge =
-          getMakingCharge(
-            metafields
-          );
-
-
-        // ============================================
-        // FIND GOLD VARIANTS FIRST
-        // ============================================
-
-        const goldVariants = [];
-
-        const silverVariants = [];
-
-
-        for (
-          const variant
-          of (product.variants || [])
-        ) {
-
-
-          if (
-            isGoldVariant(
-              product,
-              variant
-            )
-          ) {
-
-            goldVariants.push(
-              variant
-            );
-
-          }
-
-          else {
-
-            silverVariants.push(
-              variant
-            );
-
-          }
-
-        }
-
-
-        // ============================================
-        // SILVER VARIANTS ARE NEVER UPDATED
-        // ============================================
-
-        silverVariantsNotChanged +=
-          silverVariants.length;
-
-
-        // ============================================
-        // IF NO GOLD VARIANT, CONTINUE
-        // ============================================
-
-        if (
-          goldVariants.length === 0
-        ) {
-
-          console.log(
-            "NO GOLD VARIANTS:",
-            product.title
-          );
-
-          continue;
-
-        }
-
-
-        // ============================================
-        // IF GOLD PRODUCT HAS NO WEIGHT
-        // ============================================
-
-        if (
-          !goldWeight ||
-          goldWeight <= 0
-        ) {
-
-          console.log(
-            "NO GOLD WEIGHT FOUND:",
-            product.title
-          );
-
-          console.log(
-            "AVAILABLE METAFIELDS:"
-          );
-
-          for (
-            const field
-            of metafields
-          ) {
-
-            console.log(
-              field.namespace +
-              "." +
-              field.key +
-              " = " +
-              field.value
-            );
-
-          }
-
-
-          productsWithoutGoldWeight++;
-
-          continue;
-
-        }
-
-
-        // ============================================
-        // CALCULATE NEW PRICE
-        //
-        // GOLD RATE × GOLD WEIGHT
-        // + MAKING CHARGE
-        // ============================================
-
-        const priceINR =
-
-          (
-            goldPrice *
-            goldWeight
-          )
-
-          +
-
-          makingCharge;
-
-
-        // ============================================
-        // CONVERT INR TO USD
-        // ============================================
-
-        const priceUSD =
-
-          priceINR *
-          INR_TO_USD;
-
-
-        const finalPrice =
-
-          Number(
-            priceUSD.toFixed(2)
-          );
-
-
-        console.log(
-          "GOLD WEIGHT:",
-          goldWeight
-        );
-
-        console.log(
-          "MAKING CHARGE:",
-          makingCharge
-        );
-
-        console.log(
-          "PRICE INR:",
-          priceINR
-        );
-
-        console.log(
-          "FINAL PRICE USD:",
-          finalPrice
-        );
-
-
-        // ============================================
-        // UPDATE ONLY GOLD VARIANTS
-        // ============================================
-
-        let thisProductUpdated =
-          false;
-
-
-        for (
-          const variant
-          of goldVariants
-        ) {
-
-
-          console.log(
-            "UPDATING GOLD VARIANT:",
-            variant.title
-          );
-
-
-          const success =
-            await updateVariantPrice(
-
-              variant.id,
-
-              finalPrice
-
-            );
-
-
-          if (success) {
-
-            updatedGoldVariants++;
-
-            thisProductUpdated =
-              true;
-
-
-            console.log(
-              "SUCCESS:",
-              variant.title
-            );
-
-          }
-
-          else {
-
-            failedVariants++;
-
-          }
-
-        }
-
-
-        if (
-          thisProductUpdated
-        ) {
-
-          updatedProducts++;
-
-        }
-
-      }
-
-
-      // ==============================================
-      // SUCCESS PAGE
-      // ==============================================
-
-      res.send(`
+    res.send(`
 
 <!DOCTYPE html>
 
@@ -1140,112 +550,97 @@ app.post(
 
 <meta charset="UTF-8">
 
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1.0"
->
+<meta name="viewport"
+content="width=device-width, initial-scale=1.0">
 
 <title>Products Updated</title>
-
 
 <style>
 
 body {
 
-  font-family:
-    Arial,
-    sans-serif;
+  margin: 0;
 
-  background:
-    #f6f6f7;
+  min-height: 100vh;
 
-  padding: 50px 20px;
+  display: flex;
 
-  text-align: center;
+  justify-content: center;
 
+  align-items: center;
+
+  font-family: Arial, sans-serif;
+
+  background: #f4f5f7;
+
+  color: #1f2937;
 }
 
+.card {
 
-.container {
+  width: 100%;
 
   max-width: 650px;
 
-  margin: auto;
-
   background: white;
 
-  padding: 40px;
+  padding: 45px;
 
-  border-radius: 12px;
+  border-radius: 16px;
+
+  text-align: center;
 
   box-shadow:
-    0 4px 20px
+    0 10px 35px
     rgba(0,0,0,0.08);
-
 }
 
+h1 {
 
-.success {
-
-  color: #008060;
-
-  font-size: 30px;
-
+  color: #176653;
 }
 
+.big {
 
-h2 {
-
-  color: #202223;
-
-}
-
-
-p {
-
-  font-size: 17px;
-
-  line-height: 1.6;
-
-}
-
-
-.green {
-
-  color: #008060;
+  font-size: 25px;
 
   font-weight: bold;
 
+  margin: 20px 0;
 }
 
-
-.orange {
-
-  color: #8a6116;
-
-  font-weight: bold;
-
-}
-
-
-a {
-
-  display: inline-block;
+.stats {
 
   margin-top: 25px;
 
-  padding: 12px 25px;
+  line-height: 2;
 
-  background: #008060;
+  font-size: 17px;
+}
+
+.success {
+
+  color: #176653;
+
+  font-weight: bold;
+}
+
+.back {
+
+  display: inline-block;
+
+  margin-top: 30px;
+
+  padding: 14px 25px;
+
+  background: #147d67;
 
   color: white;
 
   text-decoration: none;
 
   border-radius: 8px;
-
 }
-
 
 </style>
 
@@ -1254,173 +649,122 @@ a {
 
 <body>
 
+<div class="card">
 
-<div class="container">
-
-
-<h1 class="success">
-
+<h1>
 ✅ Gold Prices Updated Successfully!
-
 </h1>
 
 
-<h2>
+<div class="big">
 
-${updatedProducts} Products Updated
+${result.productsUpdated} Products Updated
 
-</h2>
-
-
-<p>
-
-Gold Variants Updated:
-
-<strong class="green">
-
-${updatedGoldVariants}
-
-</strong>
-
-</p>
+</div>
 
 
-<p>
+<div class="stats">
 
-Silver / Other Variants:
+<b>Total Products Checked:</b>
+${result.totalProducts}
 
-<strong>
+<br>
 
-${silverVariantsNotChanged}
+<b>Gold Variants Updated:</b>
+<span class="success">
+${result.goldVariantsUpdated}
+</span>
 
-NOT changed
+<br>
 
-</strong>
+<b>Silver Variants NOT Changed:</b>
+${result.silverVariantsSkipped}
 
-</p>
+<br>
 
+<b>Other Variants Skipped:</b>
+${result.otherVariantsSkipped}
 
-<p>
+<br><br>
 
-Products Without Gold Weight:
+<b>Today's Gold Price:</b>
 
-<strong class="orange">
+₹ ${result.goldPriceINR.toFixed(2)}
 
-${productsWithoutGoldWeight}
+<br>
 
-</strong>
+<b>Gold Price Applied in Shopify:</b>
 
-</p>
+$ ${result.goldPriceUSD.toFixed(2)}
 
-
-<p>
-
-Failed Variant Updates:
-
-<strong>
-
-${failedVariants}
-
-</strong>
-
-</p>
+</div>
 
 
-<p>
-
-Today's Gold Price:
-
-<strong>
-
-₹ ${goldPrice}
-
-</strong>
-
-Per Gram
-
-</p>
+${
+result.errors.length > 0
+? `
+<br>
+<b>
+Errors:
+${result.errors.length}
+</b>
+`
+: ""
+}
 
 
-<p>
-
-Currency:
-
-<strong>
-
-₹ INR automatically converted to $ USD
-
-</strong>
-
-</p>
-
-
-<a href="/">
+<a
+href="/"
+class="back"
+>
 
 ← Go Back
 
 </a>
 
-
 </div>
-
 
 </body>
 
 </html>
 
-      `);
+    `);
+
+  } catch (error) {
+
+    console.error(
+      "UPDATE ERROR:",
+      error.response?.data ||
+      error.message
+    );
 
 
-    }
-
-
-    catch (error) {
-
-
-      console.error(
-        "========================================"
-      );
-
-      console.error(
-        "ERROR UPDATING PRODUCTS:"
-      );
-
-      console.error(error);
-
-      console.error(
-        "========================================"
-      );
-
-
-      res.status(500).send(`
+    res.status(500).send(`
 
 <!DOCTYPE html>
 
 <html>
 
+<head>
+
+<meta charset="UTF-8">
+
+<title>Error Updating Products</title>
+
+</head>
+
 <body
 
 style="
-
 font-family:Arial;
-
-background:#f6f6f7;
-
-padding:50px;
-
 text-align:center;
-
-"
-
->
-
+padding:80px;
+background:#f4f5f7;
+">
 
 <h1>
-
 ❌ Error Updating Products
-
 </h1>
-
 
 <p>
 
@@ -1428,45 +772,39 @@ ${error.message}
 
 </p>
 
+<p>
 
-<br>
+Make sure SHOPIFY_STORE and
+SHOPIFY_ACCESS_TOKEN are correctly added in Render Environment Variables.
 
+</p>
 
 <a href="/">
-
 ← Go Back
-
 </a>
-
 
 </body>
 
 </html>
 
-      `);
-
-    }
-
+    `);
   }
-);
+
+});
 
 
-// =====================================================
-// SERVER
-// =====================================================
+/* =====================================================
+   SERVER
+===================================================== */
 
 const PORT =
   process.env.PORT || 10000;
 
 
-app.listen(
-  PORT,
-  () => {
+app.listen(PORT, () => {
 
-    console.log(
-      "Gold Price Updater running on port " +
-      PORT
-    );
+  console.log(
+    `Gold Price Updater running on port ${PORT}`
+  );
 
-  }
-);
+});
