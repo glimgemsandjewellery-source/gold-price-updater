@@ -14,8 +14,8 @@ let goldPrice = 0;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// INR થી USD conversion
 const INR_TO_USD = Number(process.env.INR_TO_USD || 0.012);
+
 
 // ==========================================
 // HOME PAGE
@@ -82,6 +82,7 @@ input {
 }
 
 button {
+  width: 100%;
   background: #008060;
   color: white;
   border: none;
@@ -159,7 +160,7 @@ Update All Product Prices
 
 
 // ==========================================
-// UPDATE GOLD PRICE + ALL SHOPIFY PRODUCTS
+// UPDATE ALL GOLD PRODUCTS
 // ==========================================
 
 app.post("/update-gold-price", async (req, res) => {
@@ -169,29 +170,58 @@ app.post("/update-gold-price", async (req, res) => {
     goldPrice = Number(req.body.goldPrice);
 
     if (!goldPrice || goldPrice <= 0) {
-      return res.send("❌ Please enter a valid gold price.");
+
+      return res.send(`
+        <h1>❌ Please enter a valid Gold Price</h1>
+        <br>
+        <a href="/">← Go Back</a>
+      `);
+
     }
 
+
     if (!SHOPIFY_STORE || !SHOPIFY_ACCESS_TOKEN) {
+
       return res.send(`
         <h1>❌ Shopify Settings Missing</h1>
-        <p>Please add SHOPIFY_STORE and SHOPIFY_ACCESS_TOKEN in Render Environment Variables.</p>
-        <a href="/">Go Back</a>
+
+        <p>
+        SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN is missing in Render.
+        </p>
+
+        <br>
+
+        <a href="/">← Go Back</a>
       `);
+
     }
+
 
     console.log("Today's Gold Price:", goldPrice);
 
-    // GET ALL PRODUCTS
+
+    // ==========================================
+    // GET ALL SHOPIFY PRODUCTS
+    // ==========================================
+
     const productsResponse = await fetch(
+
       `https://${SHOPIFY_STORE}/admin/api/2025-01/products.json?limit=250`,
+
       {
+
         headers: {
+
           "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+
           "Content-Type": "application/json"
+
         }
+
       }
+
     );
+
 
     if (!productsResponse.ok) {
 
@@ -199,66 +229,54 @@ app.post("/update-gold-price", async (req, res) => {
 
       console.log("Shopify Error:", errorText);
 
-      throw new Error("Unable to connect to Shopify API");
+      throw new Error(
+        "Unable to connect to Shopify API"
+      );
 
     }
+
 
     const data = await productsResponse.json();
 
     const products = data.products || [];
 
+
     let updatedProducts = 0;
 
-    // LOOP THROUGH PRODUCTS
+
+    // ==========================================
+    // LOOP THROUGH ALL PRODUCTS
+    // ==========================================
+
     for (const product of products) {
 
+
+      // ==========================================
       // GET PRODUCT METAFIELDS
+      // ==========================================
+
       const metafieldsResponse = await fetch(
+
         `https://${SHOPIFY_STORE}/admin/api/2025-01/products/${product.id}/metafields.json`,
+
         {
+
           headers: {
-            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN
+
+            "X-Shopify-Access-Token":
+              SHOPIFY_ACCESS_TOKEN
+
           }
+
         }
+
       );
+
 
       if (!metafieldsResponse.ok) {
-        console.log("Could not get metafields for:", product.title);
-        continue;
-      }
-
-      const metafieldsData = await metafieldsResponse.json();
-
-      const metafields = metafieldsData.metafields || [];
-
-
-      // FIND GOLD WEIGHT
-      const weightField = metafields.find(
-        item =>
-          item.namespace === "custom" &&
-          (
-            item.key === "gold_weight" ||
-            item.key === "weight"
-          )
-      );
-
-
-      // FIND MAKING CHARGE
-      const makingField = metafields.find(
-        item =>
-          item.namespace === "custom" &&
-          (
-            item.key === "making_charge" ||
-            item.key === "makingcharge"
-          )
-      );
-
-
-      // PRODUCT પાસે WEIGHT નથી તો SKIP
-      if (!weightField) {
 
         console.log(
-          "Skipped (No Gold Weight):",
+          "Could not get metafields for:",
           product.title
         );
 
@@ -267,43 +285,126 @@ app.post("/update-gold-price", async (req, res) => {
       }
 
 
-      const goldWeight = Number(weightField.value);
+      const metafieldsData =
+        await metafieldsResponse.json();
 
-      const makingCharge = makingField
-        ? Number(makingField.value)
-        : 0;
+
+      const metafields =
+        metafieldsData.metafields || [];
 
 
       // ==========================================
-      // PRICE CALCULATION
+      // FIND GOLD WEIGHT
       // ==========================================
 
-      // અહીં Gold Price × Product Gold Weight
+      const weightField = metafields.find(
+
+        item =>
+
+          item.namespace === "custom" &&
+
+          (
+            item.key === "gold_weight" ||
+            item.key === "weight"
+          )
+
+      );
+
+
+      // ==========================================
+      // FIND MAKING CHARGE
+      // ==========================================
+
+      const makingField = metafields.find(
+
+        item =>
+
+          item.namespace === "custom" &&
+
+          (
+            item.key === "making_charge" ||
+            item.key === "makingcharge"
+          )
+
+      );
+
+
+      // ==========================================
+      // NO GOLD WEIGHT = SKIP PRODUCT
+      // ==========================================
+
+      if (!weightField) {
+
+        console.log(
+          "Skipped - No Gold Weight:",
+          product.title
+        );
+
+        continue;
+
+      }
+
+
+      const goldWeight =
+        Number(weightField.value);
+
+
+      const makingCharge =
+        makingField
+          ? Number(makingField.value)
+          : 0;
+
+
+      // ==========================================
+      // CALCULATE PRODUCT PRICE
+      // ==========================================
+
       const priceINR =
-        (goldPrice * goldWeight) +
+
+        (goldPrice * goldWeight)
+
+        +
+
         makingCharge;
 
 
-      // INR → USD
+      // INR TO USD
+
       const priceUSD =
+
         priceINR * INR_TO_USD;
 
 
       const finalPrice =
-        Number(priceUSD.toFixed(2));
+
+        Number(
+          priceUSD.toFixed(2)
+        );
 
 
-      // UPDATE ALL VARIANTS
+      // ==========================================
+      // UPDATE ALL PRODUCT VARIANTS
+      // ==========================================
+
       for (const variant of product.variants) {
 
+
         const updateResponse = await fetch(
+
           `https://${SHOPIFY_STORE}/admin/api/2025-01/variants/${variant.id}.json`,
+
           {
+
             method: "PUT",
 
             headers: {
-              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-              "Content-Type": "application/json"
+
+              "X-Shopify-Access-Token":
+                SHOPIFY_ACCESS_TOKEN,
+
+              "Content-Type":
+                "application/json"
+
             },
 
             body: JSON.stringify({
@@ -312,22 +413,32 @@ app.post("/update-gold-price", async (req, res) => {
 
                 id: variant.id,
 
-                price: finalPrice.toFixed(2)
+                price:
+                  finalPrice.toFixed(2)
 
               }
 
             })
 
           }
+
         );
+
 
         if (!updateResponse.ok) {
 
-          const errorText = await updateResponse.text();
+          const errorText =
+            await updateResponse.text();
+
 
           console.log(
+
             "Variant Update Error:",
+
+            product.title,
+
             errorText
+
           );
 
         }
@@ -337,47 +448,157 @@ app.post("/update-gold-price", async (req, res) => {
 
       updatedProducts++;
 
+
       console.log(
+
         "Updated:",
+
         product.title,
-        "USD:",
+
+        "Final Price:",
+
         finalPrice
+
       );
 
     }
 
 
+    // ==========================================
+    // SUCCESS PAGE
+    // ==========================================
+
     res.send(`
 
-      <h1>✅ Products Updated Successfully!</h1>
+<!DOCTYPE html>
 
-      <h2>${updatedProducts} Products Updated</h2>
+<html>
 
-      <p>Today's Gold Price: ₹ ${goldPrice}</p>
+<head>
 
-      <p>All eligible Shopify product prices have been updated.</p>
+<title>Products Updated</title>
 
-      <br>
+<style>
 
-      <a href="/">← Go Back</a>
+body {
+
+font-family: Arial;
+
+background: #f6f6f7;
+
+padding: 50px;
+
+text-align: center;
+
+}
+
+.container {
+
+max-width: 600px;
+
+margin: auto;
+
+background: white;
+
+padding: 40px;
+
+border-radius: 12px;
+
+}
+
+.success {
+
+color: #008060;
+
+font-size: 28px;
+
+}
+
+a {
+
+display: inline-block;
+
+margin-top: 25px;
+
+padding: 12px 25px;
+
+background: #008060;
+
+color: white;
+
+text-decoration: none;
+
+border-radius: 8px;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1 class="success">
+
+✅ Products Updated Successfully!
+
+</h1>
+
+<h2>
+
+${updatedProducts} Products Updated
+
+</h2>
+
+<p>
+
+Today's Gold Price: ₹ ${goldPrice}
+
+</p>
+
+<p>
+
+All eligible Gold product prices have been updated.
+
+</p>
+
+<a href="/">
+
+← Go Back
+
+</a>
+
+</div>
+
+</body>
+
+</html>
 
     `);
 
   }
 
+
   catch (error) {
 
     console.error(error);
 
+
     res.send(`
 
-      <h1>❌ Error Updating Products</h1>
+<h1>❌ Error Updating Products</h1>
 
-      <p>${error.message}</p>
+<p>${error.message}</p>
 
-      <br>
+<br>
 
-      <a href="/">Go Back</a>
+<a href="/">
+
+← Go Back
+
+</a>
 
     `);
 
@@ -390,12 +611,16 @@ app.post("/update-gold-price", async (req, res) => {
 // SERVER
 // ==========================================
 
-const PORT = process.env.PORT || 10000;
+const PORT =
+  process.env.PORT || 10000;
+
 
 app.listen(PORT, () => {
 
   console.log(
+
     "Gold Price Updater running on port " + PORT
+
   );
 
 });
