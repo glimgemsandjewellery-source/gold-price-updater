@@ -25,7 +25,39 @@ const INR_TO_USD =
 
 
 // ==========================================
-// GET SHOPIFY ACCESS TOKEN AUTOMATICALLY
+// SAFE NUMBER PARSER
+// FIXES NaN VALUES
+// ==========================================
+
+function parseNumber(value) {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return NaN;
+  }
+
+  const cleaned =
+    String(value)
+      .replace(/,/g, "")
+      .replace(/₹/g, "")
+      .trim();
+
+  const match =
+    cleaned.match(/-?\d+(\.\d+)?/);
+
+  if (!match) {
+    return NaN;
+  }
+
+  return Number(match[0]);
+
+}
+
+
+// ==========================================
+// GET SHOPIFY ACCESS TOKEN
 // ==========================================
 
 async function getShopifyAccessToken() {
@@ -60,10 +92,8 @@ async function getShopifyAccessToken() {
       method: "POST",
 
       headers: {
-
         "Content-Type":
           "application/x-www-form-urlencoded"
-
       },
 
       body:
@@ -214,7 +244,6 @@ async function shopifyRequest(
 
 // ==========================================
 // HOME PAGE
-// YOUR ORIGINAL DESIGN
 // ==========================================
 
 app.get("/", (req, res) => {
@@ -393,16 +422,32 @@ app.post(
       // ======================================
 
       goldPrice =
-        Number(req.body.goldPrice);
+        parseNumber(req.body.goldPrice);
 
 
       if (
-        !goldPrice ||
+        !Number.isFinite(goldPrice) ||
         goldPrice <= 0
       ) {
 
         throw new Error(
           "Please enter a valid Gold Price"
+        );
+
+      }
+
+
+      // ======================================
+      // CHECK INR TO USD RATE
+      // ======================================
+
+      if (
+        !Number.isFinite(INR_TO_USD) ||
+        INR_TO_USD <= 0
+      ) {
+
+        throw new Error(
+          "INR_TO_USD environment variable is invalid"
         );
 
       }
@@ -415,7 +460,7 @@ app.post(
 
 
       // ======================================
-      // GENERATE ACCESS TOKEN AUTOMATICALLY
+      // GET ACCESS TOKEN
       // ======================================
 
       console.log(
@@ -580,7 +625,6 @@ query {
 
           console.log(
             "SKIPPED - No Gold Weight:",
-
             product.title
           );
 
@@ -592,7 +636,36 @@ query {
 
 
         const goldWeight =
-          Number(weightValue);
+          parseNumber(weightValue);
+
+
+        // IMPORTANT:
+        // NEVER ALLOW INVALID WEIGHT
+
+        if (
+
+          !Number.isFinite(goldWeight) ||
+
+          goldWeight <= 0
+
+        ) {
+
+          console.log(
+
+            "SKIPPED - Invalid Gold Weight:",
+
+            product.title,
+
+            weightValue
+
+          );
+
+
+          skippedProducts++;
+
+          continue;
+
+        }
 
 
         // ====================================
@@ -608,8 +681,22 @@ query {
           0;
 
 
+        const parsedMakingCharge =
+          parseNumber(makingChargeValue);
+
+
+        // If making charge is invalid,
+        // use 0 instead of NaN
+
         const makingCharge =
-          Number(makingChargeValue);
+
+          Number.isFinite(
+            parsedMakingCharge
+          )
+
+            ? parsedMakingCharge
+
+            : 0;
 
 
         // ====================================
@@ -635,35 +722,82 @@ query {
 
 
         const finalPrice =
+
           Number(
             priceUSD.toFixed(2)
           );
 
 
-        console.log(
+        // ====================================
+        // CRITICAL NaN PROTECTION
+        // ====================================
 
+        if (
+
+          !Number.isFinite(finalPrice) ||
+
+          finalPrice <= 0
+
+        ) {
+
+          console.log(
+
+            "SKIPPED - Invalid Final Price:",
+
+            product.title,
+
+            {
+
+              goldPrice,
+
+              goldWeight,
+
+              makingCharge,
+
+              priceINR,
+
+              INR_TO_USD,
+
+              finalPrice
+
+            }
+
+          );
+
+
+          skippedProducts++;
+
+          continue;
+
+        }
+
+
+        console.log(
+          "================================="
+        );
+
+
+        console.log(
           "PRODUCT:",
-
           product.title
-
         );
 
 
         console.log(
-
           "WEIGHT:",
-
           goldWeight
-
         );
 
 
         console.log(
+          "MAKING CHARGE:",
+          makingCharge
+        );
 
+
+        console.log(
           "FINAL PRICE:",
-
           finalPrice
-
         );
 
 
@@ -691,6 +825,11 @@ query {
         if (
           variants.length === 0
         ) {
+
+          console.log(
+            "SKIPPED - No Variants:",
+            product.title
+          );
 
           skippedProducts++;
 
