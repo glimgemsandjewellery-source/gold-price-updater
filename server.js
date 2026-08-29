@@ -192,27 +192,7 @@ app.post("/update-gold-price", async (req, res) => {
     }
 
 
-    // ==========================================
-    // CHECK SHOPIFY SETTINGS
-    // ==========================================
 
-    if (!SHOPIFY_STORE || !SHOPIFY_ACCESS_TOKEN) {
-
-      return res.send(`
-
-<h1>❌ Shopify Settings Missing</h1>
-
-<p>
-SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN is missing in Render.
-</p>
-
-<br>
-
-<a href="/">← Go Back</a>
-
-      `);
-
-    }
 
 
     console.log("==================================");
